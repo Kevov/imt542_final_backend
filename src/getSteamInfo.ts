@@ -2,17 +2,16 @@ import { request } from "express";
 import { GameModel } from "./GameModel";
 import { UserModel } from "./UserModel";
 
+const apiKey = process.env.STEAM_API_KEY;
+
 export async function getSteamInfo(steamid: string): Promise<any> {
-    const apiKey = process.env.STEAM_API_KEY;
     if (!apiKey) {
         throw new Error("STEAM_API_KEY is not set in environment variables");
     }
 
     const url = `https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key=${apiKey}&steamids=${steamid}`;
-    console.log("Fetching Steam info from URL:", url);
     
     try {
-        console.log("hello");
         const userSummaryRes = await fetch(url);
         if (!userSummaryRes.ok) {
             throw new Error(`HTTP error! status: ${userSummaryRes.status}`);
@@ -24,18 +23,16 @@ export async function getSteamInfo(steamid: string): Promise<any> {
             userSummary.response.players[0].avatar || "https://cdn.akamai.steamstatic.com/steamcommunity/public/images/avatars/noavatar.png"
         );
 
-        console.log("Fetched user:", user);
         const gameListUrl = `https://api.steampowered.com/IPlayerService/GetOwnedGames/v1/?key=${apiKey}&steamid=${steamid}&include_appinfo=true&format=json`;
-        console.log("Fetching owned games from URL:", gameListUrl);
         const gameListRes = await fetch(gameListUrl);
         if (!gameListRes.ok) {
             throw new Error(`HTTP error! status: ${gameListRes.status}`);
         }
         const gameList = await gameListRes.json();
-        const games: GameModel[] = gameList.response.games.map((game: any) => {
+        const gamePromiseArray: Promise<GameModel[]>[] = gameList.response.games.map(async (game: any) => {
             const appName = game.name || "Unknown Game";
             const boxArt = `https://cdn.akamai.steamstatic.com/steam/apps/${game.appid}/header.jpg`;
-            const appDescription = "No description available"; // Placeholder, as Steam API does not provide this in GetOwnedGames
+            const appDescription = await fetchGameDetails(game.appid);
             const playerInfo = {
                 playtime_forever: game.playtime_forever || 0,
                 playtime_windows_forever: game.playtime_windows_forever || 0,
@@ -47,6 +44,7 @@ export async function getSteamInfo(steamid: string): Promise<any> {
             return new GameModel(game.appid, appName, boxArt, appDescription, playerInfo);
         }
         );
+        const games = await Promise.all(gamePromiseArray);
         const bookcase = {
             user: user,
             booklist: games
@@ -57,5 +55,29 @@ export async function getSteamInfo(steamid: string): Promise<any> {
     } catch (error) {
         console.error("Error fetching Steam info:", error);
         throw error;
+    }
+}
+
+async function fetchGameDetails(appId: number): Promise<string> {
+    if (!apiKey) {
+        throw new Error("STEAM_API_KEY is not set in environment variables");
+    }
+
+    const url = `https://store.steampowered.com/api/appdetails?appids=${appId}`;
+    
+    try {
+        const response = await fetch(url);
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const data = await response.json();
+        if (data[appId] && data[appId].success) {
+            return data[appId].data.short_description || "No description available";
+        } 
+
+        return "No description available"; // Placeholder, as Steam API does not provide this in GetOwnedGames
+    } catch (error) {
+        console.error("Error fetching game details:", error);
+        return "No description available (Steam API error)";
     }
 }
